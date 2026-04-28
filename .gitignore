@@ -1,0 +1,37 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python cache / build
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local logs / temp
+*.log
+*.tmp
+*.temp
+
+# Backtest outputs (regenerable)
+2_backtesting/2.1_backtest_engine/output/
+2_backtesting/2.2_sensitivity_analysis/output/
+2_backtesting/2.2_sensitivity_analysis/reports/
+
+data/
+
+*.csv

@@ -1,0 +1,20 @@
+/*
+Template query for trade-status related columns from ASHAREEODPRICES.
+Replace:
+  {TRADE_DT_FROM} -> e.g. 20230103
+  {TRADE_DT_TO}   -> e.g. 20231229
+  {CODE_LIST}     -> '000001.SZ','000002.SZ'
+*/
+SELECT
+    p.TRADE_DT,
+    p.S_INFO_WINDCODE,
+    p.S_DQ_CLOSE,
+    p.S_DQ_TRADESTATUS,
+    p.S_DQ_TRADESTATUSCODE,
+    p.S_DQ_LIMIT,
+    p.S_DQ_STOPPING
+FROM ASHAREEODPRICES p
+WHERE p.TRADE_DT >= '{TRADE_DT_FROM}'
+  AND p.TRADE_DT <= '{TRADE_DT_TO}'
+  AND p.S_INFO_WINDCODE IN ({CODE_LIST});
+
