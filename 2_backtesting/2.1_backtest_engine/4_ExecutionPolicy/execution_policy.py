@@ -32,6 +32,8 @@ class DailyRebalanceStrategy(bt.Strategy):
         top_n=20,
         weight_mode="equal",
         factor_direction="top",
+        commission=0.001,
+        slippage=0.0005,
     )
 
     def __init__(self):
@@ -39,12 +41,28 @@ class DailyRebalanceStrategy(bt.Strategy):
         self._signal_map = self.p.signal_map or {}
         self.exec_logs: List[dict] = []
         self.nav_logs: List[dict] = []
+        self._processed_date: str | None = None
+        self._open_orders = []
+
+    def notify_order(self, order):
+        if order.status in [order.Completed, order.Canceled, order.Margin, order.Rejected]:
+            if order in self._open_orders:
+                self._open_orders.remove(order)
 
     def _on_bar(self):
         cur_date = bt.num2date(self.datas[0].datetime[0]).date().isoformat()
+        # In multi-data setups Backtrader may invoke next/prenext multiple times per same date.
+        # Ensure we process each trading date once.
+        if self._processed_date == cur_date:
+            return
+        self._processed_date = cur_date
         if cur_date not in self._rebalance_dates:
             self.nav_logs.append({"date": cur_date, "portfolio_value": self.broker.getvalue()})
             return
+
+        # Cancel stale pending orders before a fresh rebalance batch.
+        for o in list(self._open_orders):
+            self.cancel(o)
 
         signal_day = self._signal_map.get(cur_date)
         if signal_day is None or signal_day.empty:
@@ -59,6 +77,16 @@ class DailyRebalanceStrategy(bt.Strategy):
         code2data = {d._name: d for d in self.datas}
         cur_value = self.broker.getvalue()
 
+        # Long-only safety: flatten any accidental short positions first.
+        forced_cover_n = 0
+        for d in self.datas:
+            pos = self.getposition(d).size
+            if pos < 0:
+                o = self.order_target_size(data=d, target=0.0)
+                if o is not None:
+                    self._open_orders.append(o)
+                forced_cover_n += 1
+
         # sell first
         blocked_sell = 0
         for d in self.datas:
@@ -69,28 +97,63 @@ class DailyRebalanceStrategy(bt.Strategy):
             can_sell = int(getattr(d, "can_sell")[0]) if len(d) > 0 else 0
             if code not in target_codes:
                 if can_sell == 1:
-                    self.order_target_percent(data=d, target=0.0)
+                    o = self.order_target_size(data=d, target=0.0)
+                    if o is not None:
+                        self._open_orders.append(o)
                 else:
                     blocked_sell += 1
 
-        # buy / rebalance second
+        # buy / rebalance second (cash-constrained to avoid negative cash)
+        cash_now = self.broker.getcash()
+        buy_candidates = []
+        for code, w in target_w.items():
+            d = code2data.get(code)
+            if d is None or len(d) == 0:
+                continue
+            if int(getattr(d, "can_buy")[0]) != 1:
+                continue
+            px = float(d.close[0])
+            if px <= 0:
+                continue
+            target_value = max(0.0, w * cur_value)
+            current_value = self.getposition(d).size * px
+            need_value = max(0.0, target_value - current_value)
+            if need_value > 0:
+                buy_candidates.append((code, d, px, need_value))
+
         blocked_buy = 0
         for code, w in target_w.items():
             d = code2data.get(code)
             if d is None or len(d) == 0:
                 continue
             can_buy = int(getattr(d, "can_buy")[0])
-            if can_buy == 1:
-                self.order_target_percent(data=d, target=w)
-            else:
+            if can_buy != 1:
                 blocked_buy += 1
 
+        total_need = sum(x[3] for x in buy_candidates)
+        scale = 1.0
+        if total_need > 0:
+            # include slippage and commission costs
+            gross_need = total_need * (1.0 + self.p.commission + self.p.slippage)
+            if gross_need > cash_now:
+                scale = cash_now / gross_need if gross_need > 0 else 0.0
+
+        for code, d, px, need_value in buy_candidates:
+            alloc_value = need_value * scale
+            target_size = self.getposition(d).size + (alloc_value / px if px > 0 else 0.0)
+            o = self.order_target_size(data=d, target=target_size)
+            if o is not None:
+                self._open_orders.append(o)
+
         actual_hold_n = sum(1 for d in self.datas if self.getposition(d).size > 0)
+        short_hold_n = sum(1 for d in self.datas if self.getposition(d).size < 0)
         self.exec_logs.append(
             {
                 "date": cur_date,
                 "planned_top_n": self.p.top_n,
                 "actual_hold_n": actual_hold_n,
+                "short_hold_n": short_hold_n,
+                "forced_cover_n": forced_cover_n,
                 "blocked_buy_n": blocked_buy,
                 "blocked_sell_n": blocked_sell,
                 "cash_after_rebalance": self.broker.getcash(),
@@ -165,6 +228,8 @@ def run_execution(panel: pd.DataFrame, cfg: StrategyConfig) -> ExecutionResult:
         top_n=cfg.top_n,
         weight_mode=cfg.weight_mode,
         factor_direction=cfg.factor_direction,
+        commission=cfg.commission,
+        slippage=cfg.slippage,
     )
 
     results = cerebro.run()

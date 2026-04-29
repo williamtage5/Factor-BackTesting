@@ -5,10 +5,10 @@ from __future__ import annotations
 # =========================
 
 # Data locations (relative to project root)
-FACTOR_DIR = "data/2023example/synthesized_factors"
-OHLC_DIR = "1_data_request/1.1_OHLC/output/ohlc_daily_2023example"
-TRADE_CONDITION_DIR = "1_data_request/1.3_trade_condition/output/trade_condition_daily_2023example"
-BENCHMARK_PATH = "1_data_request/1.2_SH.300/output/hs300_2023example/hs300_daily.csv"
+FACTOR_DIR = "data/2015-2023dataset/synthesized_factors"
+OHLC_DIR = "1_data_request/1.1_OHLC/output/ohlc_daily_2015_2023"
+TRADE_CONDITION_DIR = "1_data_request/1.3_trade_condition/output/trade_condition_daily_2015_2023"
+BENCHMARK_PATH = "1_data_request/1.2_SH.300/output/hs300_2015_2023/hs300_daily.csv"
 
 # Strategy params
 BENCHMARK_CODE = "000300.SH"
@@ -24,4 +24,4 @@ INITIAL_CASH = 1_000_000.0
 LIMIT_EPS = 0.0005
 
 # Output
-OUTPUT_DIR = "2_backtesting/2.1_backtest_engine/output/restructured_run"
+OUTPUT_DIR = "2_backtesting/2.1_backtest_engine/output/restructured_run_2015_2023"

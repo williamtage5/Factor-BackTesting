@@ -48,6 +48,14 @@ def load_standard_panel(
         how="left",
     )
 
+    # Price sanity: non-positive prices are invalid for backtesting valuation.
+    for col in ["open", "high", "low", "close"]:
+        panel[col] = pd.to_numeric(panel[col], errors="coerce")
+        panel.loc[panel[col] <= 0, col] = pd.NA
+    panel = panel.sort_values(["stock_code", "trade_date"]).reset_index(drop=True)
+    for col in ["open", "high", "low", "close"]:
+        panel[col] = panel.groupby("stock_code", group_keys=False)[col].ffill()
+
     panel["date"] = pd.to_datetime(panel["trade_date"], format="%Y%m%d")
     panel = panel.rename(columns={"stock_code": "code"})
 
@@ -72,4 +80,3 @@ def load_standard_panel(
     benchmark = benchmark.sort_values("date").reset_index(drop=True)
 
     return panel, benchmark
-

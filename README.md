@@ -148,16 +148,22 @@
   - `signal_lag`：默认是1（T 信号，T+1 成交）
 - 后面做敏感性分析时直接改配置，不改策略代码。
 
-3. `Signal + Filter + Portfolio` 三段式  
+3. `Signal + Filter + Portfolio`   
 - `Signal`：按因子值排序。  
 - `Filter`：先过滤 `can_buy/can_sell`。  
 - `Portfolio`：等权或风险平价分配目标权重。
 
-4. `ExecutionPolicy`（关键）  
+4. `ExecutionPolicy`
 - 先卖后买。  
 - 卖出：仅对 `can_sell=1` 的目标剔除仓位下单；`can_sell=0` 的仓位保留。  
 - 买入：仅从 `can_buy=1` 的候选中买；不足 `top_n` 的部分留现金。  
 - 这样才能把“可买卖标签”真正纳入回测，而不是只做统计。
+- 如果当期买卖不掉的处理方法：
+  - 卖不掉（can_sell=0）
+    不下卖单，仓位保留到下一次可卖日。
+  - 买不到（can_buy=0）
+    不下买单，该权重对应资金留在现金。
+  - 结果：actual_hold_n 可能不等于 top_n，组合会出现“现金偏高”或“遗留仓位偏多”。
 
 5. `Metrics` 层  
 - 输出策略与基准净值、年化收益、波动率、Calmar。  
@@ -166,6 +172,25 @@
 值得注意的是，T日的因子能够得到交易，但是交易要放在T+1收盘成交。交易的限制是T+1日的限制。这个主要考虑的是实操层面的。
 
 以下是每个结果文件的分析：
+
+* 以下面的数据集和参数组合为例（不是最优）：
+  * 数据集:时间区间：2015-01-05 到 2023-12-29
+  * 参数组合：
+    * rebalance_freq = M（月度）
+    * top_n = 20
+    * weight_mode = equal
+    * factor_direction = top
+    * commission = 0.001
+    * slippage = 0.0005
+    * signal_lag = 1
+    * exec_price = close
+    * 基准：000300.SH
+  * 最后一天的处理方法：
+    * 最后一天信号：忽略（不下新单）
+    * 最后一天净值：按当日收盘对已有持仓做估值
+    * 不做强制平仓（当前配置下）
+
+---
 
 * `nav_timeseries.csv`（净值曲线原始数据）
     列：
@@ -199,6 +224,7 @@
 
 ---
 * `nav_curve.png`（净值曲线图）
+  * 在缓冲期（还没到调仓日）仓位是没有的，这段时间nav始终是1。 
     三条线分别对应上面三列：
     - 蓝：`strategy_nav`
     - 橙：`benchmark_nav`
@@ -208,12 +234,11 @@
     - 是“归一化净值”，不是价格
     - 起点都在 `1.0`
     - 大于 1 是相对起点盈利，小于 1 是亏损
-
+  ![alt text](2_backtesting/2.1_backtest_engine/output/restructured_run_2015_2023/nav_curve.png)
     ---
 
 * `metrics_strategy.csv`（策略绩效指标）
 字段与计算：
-
   * `ann_return`（年化收益）
   - 先取日收益：
   \[
@@ -250,10 +275,18 @@
   \]
   （若无回撤则记 0）
 
+| ann_return | ann_vol | max_drawdown | calmar |
+| :--- | :--- | :--- | :--- |
+| 0.0463 | 0.1538 | -0.4070 | 0.1137 |
+
   ---
 
 *  `metrics_benchmark.csv`（基准绩效指标）
-    与 `metrics_strategy.csv` **同一公式**，只是把 `strategy_nav` 换成 `benchmark_nav`。
+    与 `metrics_strategy.csv` **同一公式**，只是把 `strategy_nav` 换成 `benchmark_nav`。由于现在获取到了处理好的指数的收盘价，所以直接用合并好的close进行计算就可以。
+
+| ann_return | ann_vol | max_drawdown | calmar |
+| :--- | :--- | :--- | :--- |
+| -0.0068 | 0.2226 | -0.4670 | -0.0146 |
 
 ---
 
@@ -261,7 +294,10 @@
   - `final_strategy_nav`：最后一天策略净值
   - `final_benchmark_nav`：最后一天基准净值
   - `final_excess_nav`：最后一天超额净值（前两者比值）
-
+  - 
+| final_strategy_nav | final_benchmark_nav | final_excess_nav | strategy_ann_return | strategy_ann_vol | strategy_max_drawdown | strategy_calmar | benchmark_ann_return | benchmark_ann_vol | benchmark_max_drawdown | benchmark_calmar |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 1.4811 | 0.9422 | 1.5720 | 0.0463 | 0.1538 | -0.4070 | 0.1137 | -0.0068 | 0.2226 | -0.4670 | -0.0146 |
 
 ---
 
@@ -273,6 +309,16 @@
     - `blocked_sell_n`：因 `can_sell=0` 未能卖出的目标剔除数
     - `cash_after_rebalance`：调仓后现金
 
+| date | planned_top_n | actual_hold_n | short_hold_n | forced_cover_n | blocked_buy_n | blocked_sell_n | cash_after_rebalance |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 2015-02-02 | 20 | 0 | 0 | 0 | 0 | 0 | 1000000.0000 |
+| 2015-03-02 | 20 | 19 | 0 | 0 | 0 | 0 | 44071.6847 |
+| 2015-04-01 | 20 | 20 | 0 | 0 | 1 | 2 | 458703.2151 |
+| 2015-05-04 | 20 | 22 | 0 | 0 | 1 | 0 | 246624.9322 |
+| 2015-06-01 | 20 | 19 | 0 | 0 | 0 | 2 | 887725.4036 |
+| 2015-07-01 | 20 | 22 | 0 | 0 | 0 | 3 | 320172.0360 |
+| 2015-08-03 | 20 | 23 | 0 | 0 | 1 | 3 | 295280.4211 |
+
 ---
 
 * `metrics_execution.csv`（执行质量汇总）
@@ -282,6 +328,9 @@
     - `blocked_buy_ratio`：买入受阻比例（总 blocked_buy / 理论买入机会）
     - `blocked_sell_ratio`：卖出受阻比例（总 blocked_sell / 理论卖出机会）
 
+| rebalance_count | avg_actual_hold_n | blocked_buy_ratio | blocked_sell_ratio |
+| :--- | :--- | :--- | :--- |
+| 107 | 32.7196 | 0.0140 | 0.0328 |
 ---
 
 ## 2.2 参数敏感性分析
@@ -290,3 +339,59 @@
   * rebalance_freq ∈ {W, M, Q}
   * top_n ∈ {10, 20, 30}
 调用2.1的代码，每次参数组合保存一个结果，结果文件存储在2_backtesting\2.2_sensitivity_analysis\output。然后汇总成不同指标和热力图进行分析，结果存储在2_backtesting\2.2_sensitivity_analysis\reports。
+
+### 2.2.1 当前最优参数组合
+
+本次参数敏感性分析（`W/M/Q × Top10/20/30`）中，综合绝对收益、风险调整后收益与相对基准表现，参数敏感性热力图为：
+
+![alt text](2_backtesting/2.2_sensitivity_analysis/reports/heatmap_ann_return.png)
+
+![alt text](2_backtesting/2.2_sensitivity_analysis/reports/heatmap_calmar.png)
+
+![alt text](2_backtesting/2.2_sensitivity_analysis/reports/heatmap_final_excess_nav.png)
+
+因此，最优组合为：
+
+- **组合ID**：`freq-W_top-20_wm-equal_dir-top`
+- **参数含义**：
+  - 调仓频率：`W`（周度）
+  - 持仓数量：`Top 20`
+  - 权重方式：`equal`（等权）
+  - 因子方向：`top`（选取因子分数最高的股票）
+  - 执行设定：`T`信号、`T+1`执行，交易成本与滑点已计入
+
+其核心结果为：
+
+- 年化收益（`ann_return`）：**12.90%**
+- 年化波动（`ann_vol`）：**16.54%**
+- 最大回撤（`max_drawdown`）：**-33.10%**
+- Calmar 比率（`calmar`）：**0.3898**
+- 策略期末净值（`final_strategy_nav`）：**2.8680**
+- 基准期末净值（`final_benchmark_nav`）：**0.9422**
+- 超额净值（`final_excess_nav`）：**3.0439**
+
+
+其nav的变化如图：
+![alt text](2_backtesting/2.2_sensitivity_analysis/output/freq-W_top-20_wm-equal_dir-top/nav_curve.png)
+
+结果解读:
+
+1. **绝对收益维度**：该组合在测试网格中取得最高年化收益。
+2. **风险收益维度**：Calmar 比率在所有组合中最高，说明单位回撤对应的收益效率最佳。
+3. **相对收益维度**：超额净值最高，表明相较沪深300基准具备最强的长期相对优势。
+
+### 2.2.2 不同参数组合的结果对比汇总
+
+| RebalanceFreq | TopN | AnnReturn | AnnVol | MaxDrawdown | Calmar | FinalStrategyNAV | FinalBenchmarkNAV | FinalExcessNAV | AvgActualHoldN | BlockedBuyRatio | BlockedSellRatio |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| M | 10 | 0.0454 | 0.1528 | -0.4278 | 0.1061 | 1.4703 | 0.9422 | 1.5605 | 19.2804 | 0.0159 | 0.0480 |
+| M | 20 | 0.0463 | 0.1538 | -0.4070 | 0.1137 | 1.4811 | 0.9422 | 1.5720 | 32.7196 | 0.0140 | 0.0328 |
+| M | 30 | 0.0339 | 0.1410 | -0.4190 | 0.0809 | 1.3355 | 0.9422 | 1.4174 | 54.0000 | 0.0131 | 0.0802 |
+| Q | 10 | -0.0214 | 0.1370 | -0.4739 | -0.0451 | 0.8291 | 0.9422 | 0.8799 | 16.5429 | 0.0171 | 0.0503 |
+| Q | 20 | 0.0070 | 0.1370 | -0.3463 | 0.0203 | 1.0627 | 0.9422 | 1.1279 | 30.3143 | 0.0129 | 0.0311 |
+| Q | 30 | -0.0014 | 0.1392 | -0.4070 | -0.0035 | 0.9878 | 0.9422 | 1.0483 | 48.9714 | 0.0143 | 0.0516 |
+| W | 10 | 0.1136 | 0.1687 | -0.3911 | 0.2905 | 2.5457 | 0.9422 | 2.7018 | 16.5044 | 0.0122 | 0.0698 |
+| **W** | **20** | **0.1290** | **0.1654** | **-0.3310** | **0.3898** | **2.8680** | **0.9422** | **3.0439** | **34.1725** | **0.0116** | **0.0541** |
+| W | 30 | 0.0970 | 0.1540 | -0.3312 | 0.2929 | 2.2343 | 0.9422 | 2.3713 | 51.4410 | 0.0111 | 0.0612 |
+
+
